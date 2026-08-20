@@ -1,0 +1,4 @@
+# dsh bundle patch: mounts the subagent model setting plugin (host + settings UI).
+- insert:
+    - id: dsh-subagent-setting
+      name: 'dsh-subagent-setting'

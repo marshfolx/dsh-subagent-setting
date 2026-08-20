@@ -1,0 +1,12 @@
+{
+  "name": "dsh-subagent-setting",
+  "description": "Configure default provider/model/reasoning effort for subagents from the Web settings page",
+  "version": "0.1.0",
+  "entry": {
+    "name": "dsh-subagent-setting",
+    "inject": []
+  },
+  "client": {
+    "platform": "web"
+  }
+}
