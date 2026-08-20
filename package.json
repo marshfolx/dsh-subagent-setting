@@ -1,7 +1,7 @@
 {
   "name": "dsh-subagent-setting",
   "version": "0.1.0",
-  "description": "Set the default provider, model and reasoning effort for new subagents from the Web Settings page; optionally apply changes to existing idle subagents. · DSH 插件：在设置页可视化配置 subagent 默认的提供商、模型与思考等级，新创建的 subagent 立即生效，可选的让空闲 subagent 也跟随新设置。",
+  "description": "Configure the default provider, model and reasoning effort for new subagents from the Web settings page; optionally apply changes to existing idle subagents. · DSH 插件：在设置页可视化配置 subagent 默认的提供商、模型与思考等级，新创建的 subagent 立即生效，可选的让空闲 subagent 也跟随新设置。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -66,9 +66,21 @@
     "dsh-plugin",
     "deepseek",
     "deepseek-harness",
+    "harness",
     "subagent",
     "model",
-    "settings"
+    "reasoning",
+    "reasoning-effort",
+    "settings",
+    "llm"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marshfolx/dsh-subagent-setting.git"
+  },
+  "bugs": {
+    "url": "https://github.com/marshfolx/dsh-subagent-setting/issues"
+  },
+  "homepage": "https://github.com/marshfolx/dsh-subagent-setting",
   "license": "MIT"
 }
