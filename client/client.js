@@ -35,6 +35,9 @@ const zh = {
   saveFailed: '保存失败',
   loadFailed: '设置加载失败',
   catalogFailed: '模型目录加载失败',
+  save: '保存设置',
+  reset: '放弃更改',
+  unsaved: '有未保存的更改',
 };
 
 const en = {
@@ -56,6 +59,9 @@ const en = {
   saveFailed: 'Failed to save',
   loadFailed: 'Failed to load settings',
   catalogFailed: 'Failed to load model catalog',
+  save: 'Save settings',
+  reset: 'Discard changes',
+  unsaved: 'You have unsaved changes',
 };
 
 const STYLE_ID = 'dsh-subagent-setting-styles';
@@ -83,6 +89,15 @@ const cssText = `
 .dsh_sas_selectOptionActive{background:var(--dsw-alias-interactive-bg-hover)}
 .dsh_sas_status{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px}
 .dsh_sas_statusError{color:var(--dsw-alias-state-error-primary)}
+.dsh_sas_actions{display:flex;align-items:center;gap:8px;min-width:0}
+.dsh_sas_unsaved{color:var(--dsw-alias-state-warn-label);font-size:12px;line-height:18px;flex:none}
+.dsh_sas_saveBtn{box-sizing:border-box;height:32px;font:inherit;cursor:pointer;border:none;border-radius:16px;justify-content:center;align-items:center;gap:4px;padding:0 16px;font-size:13px;line-height:20px;display:inline-flex;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}
+.dsh_sas_saveBtn:hover:not(:disabled){filter:brightness(1.06)}
+.dsh_sas_saveBtn:disabled{opacity:.55;cursor:default}
+.dsh_sas_saveBtnDirty{box-shadow:0 0 0 2px var(--dsw-alias-brand-primary)}
+.dsh_sas_resetBtn{box-sizing:border-box;height:32px;font:inherit;cursor:pointer;border:1px solid var(--dsw-alias-border-l2);border-radius:16px;justify-content:center;align-items:center;gap:4px;padding:0 14px;font-size:13px;line-height:20px;display:inline-flex;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary)}
+.dsh_sas_resetBtn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+.dsh_sas_resetBtn:disabled{opacity:.55;cursor:default}
 `;
 
 function adoptStyles() {
@@ -160,7 +175,10 @@ function SASSelect({ value, onChange, placeholder, options, disabled }) {
 }
 
 function SubagentSettingSection({ connection, t }) {
-  const [settings, setSettings] = React.useState(DEFAULT_SETTINGS);
+  // `saved` is the persisted value; `draft` is the in-form editing state.
+  // Nothing is written until the user presses Save.
+  const [saved, setSaved] = React.useState(DEFAULT_SETTINGS);
+  const [draft, setDraft] = React.useState(DEFAULT_SETTINGS);
   const [groups, setGroups] = React.useState([]);
   const [busy, setBusy] = React.useState(false);
   const [status, setStatus] = React.useState(null);
@@ -178,18 +196,16 @@ function SubagentSettingSection({ connection, t }) {
         return;
       }
       const ns = describedResult.value.namespaces.find((n) => n.ns === NS);
-      if (ns !== undefined) {
-        const value = ns.value ?? {};
-        setSettings({
-          enabled: value.enabled !== false,
-          provider: String(value.provider ?? ''),
-          model: String(value.model ?? ''),
-          reasoningEffort: String(value.reasoningEffort ?? ''),
-          applyToIdle: value.applyToIdle === true,
-        });
-      } else {
-        setSettings(DEFAULT_SETTINGS);
-      }
+      const value = ns?.value ?? {};
+      const next = {
+        enabled: value.enabled !== false,
+        provider: String(value.provider ?? ''),
+        model: String(value.model ?? ''),
+        reasoningEffort: String(value.reasoningEffort ?? ''),
+        applyToIdle: value.applyToIdle === true,
+      };
+      setSaved(next);
+      setDraft(next);
       setGroups(catalogResult.value.groups ?? []);
       setStatus(null);
     } catch (error) {
@@ -202,7 +218,7 @@ function SubagentSettingSection({ connection, t }) {
     void load();
   }, [load]);
 
-  const save = React.useCallback(async (next) => {
+  const commitSave = React.useCallback(async (next) => {
     setBusy(true);
     setStatus(null);
     try {
@@ -220,7 +236,7 @@ function SubagentSettingSection({ connection, t }) {
         setStatus({ kind: 'error', text: t('saveFailed') + ': ' + (response.result.error?.message ?? '') });
         return;
       }
-      setSettings(next);
+      setSaved(next);
       setStatus({ kind: 'ok', text: t('saved') });
     } catch (error) {
       setStatus({ kind: 'error', text: t('saveFailed') });
@@ -230,16 +246,25 @@ function SubagentSettingSection({ connection, t }) {
     }
   }, [connection, t]);
 
-  const selectedProvider = settings.provider;
-  const selectedModel = settings.model;
+  const dirty = ['enabled', 'provider', 'model', 'reasoningEffort', 'applyToIdle']
+    .some((key) => draft[key] !== saved[key]);
+
+  const selectedProvider = draft.provider;
+  const selectedModel = draft.model;
   const providerGroup = groups.find((group) => group.id === selectedProvider);
   const availableModels = providerGroup?.models ?? [];
   const selectedModelInfo = availableModels.find((model) => model.id === selectedModel);
   const availableEfforts = selectedModelInfo?.reasoning?.efforts?.map((e) => e.id) ?? [];
 
-  const setField = (patch) => {
-    void save({ ...settings, ...patch });
+  // Editing only touches the draft; Save persists it.
+  const edit = (patch) => {
+    setDraft((prev) => ({ ...prev, ...patch }));
+    if (status?.kind === 'ok') setStatus(null);
   };
+
+  // A stale effort (left over from a model that supported it) must never
+  // survive a model switch to one that does not support it.
+  const effectiveEffort = availableEfforts.includes(draft.reasoningEffort) ? draft.reasoningEffort : '';
 
   return React.createElement('section', { className: 'dsh_sas_section', 'aria-labelledby': 'dsh-subagent-setting-title' },
     React.createElement('h2', { id: 'dsh-subagent-setting-title', className: 'dsh_sas_title' }, t('title')),
@@ -249,9 +274,9 @@ function SubagentSettingSection({ connection, t }) {
       React.createElement('input', {
         type: 'checkbox',
         className: 'dsh_sas_checkbox',
-        checked: settings.enabled,
+        checked: draft.enabled,
         disabled: busy,
-        onChange: (event) => setField({ enabled: event.target.checked }),
+        onChange: (event) => edit({ enabled: event.target.checked }),
       }),
       React.createElement('span', { className: 'dsh_sas_cardText' },
         React.createElement('span', { className: 'dsh_sas_cardTitle' }, t('enabled')),
@@ -263,9 +288,9 @@ function SubagentSettingSection({ connection, t }) {
       React.createElement('span', { className: 'dsh_sas_fieldLabel' }, t('provider')),
       React.createElement(SASSelect, {
         value: selectedProvider,
-        onChange: (value) => setField({ provider: value, model: '' }),
+        onChange: (value) => edit({ provider: value, model: '', reasoningEffort: '' }),
         placeholder: t('providerEmpty'),
-        disabled: busy || !settings.enabled,
+        disabled: busy || !draft.enabled,
         options: groups.map((group) => ({ value: group.id, label: group.name || group.id })),
       }),
     ),
@@ -274,9 +299,20 @@ function SubagentSettingSection({ connection, t }) {
       React.createElement('span', { className: 'dsh_sas_fieldLabel' }, t('model')),
       React.createElement(SASSelect, {
         value: selectedModel,
-        onChange: (value) => setField({ model: value }),
+        onChange: (value) => {
+          // Switching models may drop the current reasoning effort when the
+          // new model does not support it; clear it so a stale effort never
+          // lingers and breaks later subagent requests.
+          const nextModel = availableModels.find((model) => model.id === value);
+          const nextEfforts = nextModel?.reasoning?.efforts?.map((e) => e.id) ?? [];
+          const patch = { model: value };
+          if (draft.reasoningEffort !== '' && !nextEfforts.includes(draft.reasoningEffort)) {
+            patch.reasoningEffort = '';
+          }
+          edit(patch);
+        },
         placeholder: t('modelEmpty'),
-        disabled: busy || !settings.enabled || selectedProvider === '' || availableModels.length === 0,
+        disabled: busy || !draft.enabled || selectedProvider === '' || availableModels.length === 0,
         options: availableModels.map((model) => ({ value: model.id, label: model.name || model.id })),
       }),
     ),
@@ -284,14 +320,19 @@ function SubagentSettingSection({ connection, t }) {
     React.createElement('div', { className: 'dsh_sas_field' },
       React.createElement('span', { className: 'dsh_sas_fieldLabel' }, t('effort')),
       React.createElement(SASSelect, {
-        value: settings.reasoningEffort,
-        onChange: (value) => setField({ reasoningEffort: value }),
+        // The empty "inherit (Default)" choice is always offered, so a model
+        // without reasoning levels can still reset the effort to inherit.
+        value: effectiveEffort,
+        onChange: (value) => edit({ reasoningEffort: value }),
         placeholder: t('effortEmpty'),
-        disabled: busy || !settings.enabled,
-        options: availableEfforts.map((effort) => {
-          const label = effort.charAt(0).toUpperCase() + effort.slice(1);
-          return { value: effort, label };
-        }),
+        disabled: busy || !draft.enabled,
+        options: [
+          { value: '', label: t('effortEmpty') },
+          ...availableEfforts.map((effort) => {
+            const label = effort.charAt(0).toUpperCase() + effort.slice(1);
+            return { value: effort, label };
+          }),
+        ],
       }),
     ),
 
@@ -299,14 +340,33 @@ function SubagentSettingSection({ connection, t }) {
       React.createElement('input', {
         type: 'checkbox',
         className: 'dsh_sas_checkbox',
-        checked: settings.applyToIdle,
+        checked: draft.applyToIdle,
         disabled: busy,
-        onChange: (event) => setField({ applyToIdle: event.target.checked }),
+        onChange: (event) => edit({ applyToIdle: event.target.checked }),
       }),
       React.createElement('span', { className: 'dsh_sas_cardText' },
         React.createElement('span', { className: 'dsh_sas_cardTitle' }, t('applyToIdle')),
         React.createElement('span', { className: 'dsh_sas_cardDesc' }, t('applyToIdleDesc')),
       ),
+    ),
+
+    React.createElement('div', { className: 'dsh_sas_actions' },
+      dirty && React.createElement('span', { className: 'dsh_sas_unsaved' }, t('unsaved')),
+      React.createElement('button', {
+        type: 'button',
+        className: 'dsh_sas_resetBtn',
+        disabled: busy || !dirty,
+        onClick: () => {
+          setDraft(saved);
+          setStatus(null);
+        },
+      }, t('reset')),
+      React.createElement('button', {
+        type: 'button',
+        className: 'dsh_sas_saveBtn' + (dirty ? ' dsh_sas_saveBtnDirty' : ''),
+        disabled: busy || !dirty,
+        onClick: () => void commitSave(draft),
+      }, busy ? t('saving') : t('save')),
     ),
 
     status !== null && React.createElement('p', {
