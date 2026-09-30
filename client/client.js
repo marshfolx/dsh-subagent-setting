@@ -5,13 +5,15 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 const React = require("react");
 
 /* ============================================================
- * dsh-subagent-setting — client half
+ * dsh-subagent-setting — client half (DSH 0.2.x)
  *
- * Registers a "Subagent 模型" settings section. The form reads and writes
- * the `dsh-subagent-setting` namespace through the official connection API:
- *   connection.api.settings.describe({})   -> namespaces, incl. our section
- *   connection.api.settings.replace({ ns, section })
- *   connection.api.llm.models({})          -> provider/model/effort catalog
+ * Registers the "Subagent model" settings page. The Host half owns the
+ * namespace (`dsh-subagent-setting`, a profile entry whose Config declares
+ * volatile fields), so this half reads and writes it through the settings
+ * document itself:
+ *   ctx.configForms.get(ns)         -> per-entry form (snapshot + writes)
+ *   ctx.remote.session.modelCatalog()-> provider / model / effort catalogue
+ *   ctx.configForms.whileServed(...)  -> page exists only while the Host serves it
  * ============================================================ */
 
 const NS = 'dsh-subagent-setting';
@@ -19,7 +21,7 @@ const NS = 'dsh-subagent-setting';
 const zh = {
   nav: 'Subagent 模型',
   title: 'Subagent 默认模型',
-  subtitle: '配置新创建 subagent 默认使用的提供商、模型与思考等级；新 subagent 立即生效。',
+  subtitle: '配置新创建 subagent 默认使用的提供商、模型与思考等级；只对新创建的 subagent 生效。',
   enabled: '启用本插件',
   enabledDesc: '关闭后 subagent 继承父会话的模型，不做任何覆盖。',
   provider: '提供商',
@@ -27,14 +29,17 @@ const zh = {
   model: '模型',
   modelEmpty: '继承父会话',
   effort: '思考等级',
-  effortEmpty: '继承父会话（Default）',
+  effortEmpty: '继承父会话（默认）',
   applyToIdle: '改设置前已创建的 subagent 也跟随新设置',
   applyToIdleDesc: '开启后，设置变更会对所有空闲中的 subagent 在下一次请求生效；运行中的 subagent 从下一步开始生效。关闭则只影响之后新建的 subagent。',
+  loading: '正在读取设置…',
+  unavailable: '宿主未挂载 dsh-subagent-setting 条目，设置暂不可用。',
+  notWritable: '当前配置不可写。',
+  catalogLoading: '正在加载模型目录…',
+  catalogFailed: '模型目录加载失败',
   saving: '保存中…',
   saved: '已保存',
   saveFailed: '保存失败',
-  loadFailed: '设置加载失败',
-  catalogFailed: '模型目录加载失败',
   save: '保存设置',
   reset: '放弃更改',
   unsaved: '有未保存的更改',
@@ -43,7 +48,7 @@ const zh = {
 const en = {
   nav: 'Subagent Model',
   title: 'Subagent default model',
-  subtitle: 'Choose the default provider, model and reasoning effort for newly created subagents; new subagents pick the values up immediately.',
+  subtitle: 'Choose the default provider, model and reasoning effort for newly created subagents; only new subagents pick them up.',
   enabled: 'Enable this plugin',
   enabledDesc: 'When off, subagents inherit the parent session model untouched.',
   provider: 'Provider',
@@ -54,11 +59,14 @@ const en = {
   effortEmpty: 'Inherit parent (Default)',
   applyToIdle: 'Apply setting changes to subagents created earlier',
   applyToIdleDesc: 'When on, a settings change reaches every idle subagent on its next request; running subagents pick it up from the next step. When off, only subagents created afterwards are affected.',
+  loading: 'Reading settings…',
+  unavailable: 'The dsh-subagent-setting entry is not mounted on the Host, so this page has nothing to edit.',
+  notWritable: 'This configuration is not writable.',
+  catalogLoading: 'Loading the model catalog…',
+  catalogFailed: 'Failed to load the model catalog',
   saving: 'Saving…',
   saved: 'Saved',
   saveFailed: 'Failed to save',
-  loadFailed: 'Failed to load settings',
-  catalogFailed: 'Failed to load model catalog',
   save: 'Save settings',
   reset: 'Discard changes',
   unsaved: 'You have unsaved changes',
@@ -117,6 +125,52 @@ const DEFAULT_SETTINGS = {
   applyToIdle: false,
 };
 
+/** Narrow one settings value read from the Host into the form's own shape. */
+function normalizeSettings(value) {
+  const raw = value !== null && typeof value === 'object' ? value : {};
+  return {
+    enabled: raw.enabled !== false,
+    provider: String(raw.provider ?? ''),
+    model: String(raw.model ?? ''),
+    reasoningEffort: String(raw.reasoningEffort ?? ''),
+    applyToIdle: raw.applyToIdle === true,
+  };
+}
+
+/** Whether two settings snapshots are equal, for dirty tracking. */
+function sameSettings(a, b) {
+  return a.enabled === b.enabled
+    && a.provider === b.provider
+    && a.model === b.model
+    && a.reasoningEffort === b.reasoningEffort
+    && a.applyToIdle === b.applyToIdle;
+}
+
+/** A minimal observable snapshot store, so React can read it synchronously. */
+function createStore(initial) {
+  let snapshot = initial;
+  const listeners = new Set();
+  return {
+    getSnapshot: () => snapshot,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    set: (next) => {
+      snapshot = next;
+      for (const listener of [...listeners]) listener();
+    },
+  };
+}
+
+/** Subscribe a component to any store of this shape. */
+function useStore(store) {
+  return React.useSyncExternalStore(
+    React.useCallback((listener) => store.subscribe(listener), [store]),
+    React.useCallback(() => store.getSnapshot(), [store]),
+  );
+}
+
 /**
  * Fully controlled custom dropdown: a trigger button plus an absolutely
  * positioned option list. Avoids the native <select> popup, which misbehaves
@@ -174,87 +228,42 @@ function SASSelect({ value, onChange, placeholder, options, disabled }) {
   );
 }
 
-function SubagentSettingSection({ connection, t }) {
-  // `saved` is the persisted value; `draft` is the in-form editing state.
-  // Nothing is written until the user presses Save.
-  const [saved, setSaved] = React.useState(DEFAULT_SETTINGS);
-  const [draft, setDraft] = React.useState(DEFAULT_SETTINGS);
-  const [groups, setGroups] = React.useState([]);
+function SubagentSettingSection({ t, form, catalog }) {
+  const snapshot = useStore(form);
+  const catalogState = useStore(catalog);
+  const ready = snapshot.status === 'ready';
+
+  // `saved` mirrors the Host; `draft` is the in-form editing state. Nothing is
+  // written until the user presses Save.
+  const saved = React.useMemo(
+    () => (ready ? normalizeSettings(snapshot.value) : DEFAULT_SETTINGS),
+    [ready, snapshot.value],
+  );
+  const [draft, setDraft] = React.useState(saved);
   const [busy, setBusy] = React.useState(false);
   const [status, setStatus] = React.useState(null);
 
-  const load = React.useCallback(async () => {
-    try {
-      const [described, catalog] = await Promise.all([
-        connection.api.settings.describe({}),
-        connection.api.llm.models({}),
-      ]);
-      const describedResult = described.result;
-      const catalogResult = catalog.result;
-      if (!describedResult.ok || !catalogResult.ok) {
-        setStatus({ kind: 'error', text: t('loadFailed') });
-        return;
-      }
-      const ns = describedResult.value.namespaces.find((n) => n.ns === NS);
-      const value = ns?.value ?? {};
-      const next = {
-        enabled: value.enabled !== false,
-        provider: String(value.provider ?? ''),
-        model: String(value.model ?? ''),
-        reasoningEffort: String(value.reasoningEffort ?? ''),
-        applyToIdle: value.applyToIdle === true,
-      };
-      setSaved(next);
-      setDraft(next);
-      setGroups(catalogResult.value.groups ?? []);
-      setStatus(null);
-    } catch (error) {
-      setStatus({ kind: 'error', text: t('loadFailed') });
-      console.error('[dsh-subagent-setting] load failed:', error);
-    }
-  }, [connection, t]);
-
+  // Adopt the Host's value whenever it changes underneath us — including the
+  // first successful read. A revision only moves on a committed write, so an
+  // in-progress draft is never clobbered by our own typing.
+  const adoptedRef = React.useRef(undefined);
   React.useEffect(() => {
-    void load();
-  }, [load]);
-
-  const commitSave = React.useCallback(async (next) => {
-    setBusy(true);
+    if (!ready) return;
+    if (adoptedRef.current === snapshot.revision) return;
+    adoptedRef.current = snapshot.revision;
+    setDraft(saved);
     setStatus(null);
-    try {
-      const response = await connection.api.settings.replace({
-        ns: NS,
-        section: {
-          enabled: next.enabled,
-          provider: next.provider,
-          model: next.model,
-          reasoningEffort: next.reasoningEffort,
-          applyToIdle: next.applyToIdle,
-        },
-      });
-      if (!response.result.ok) {
-        setStatus({ kind: 'error', text: t('saveFailed') + ': ' + (response.result.error?.message ?? '') });
-        return;
-      }
-      setSaved(next);
-      setStatus({ kind: 'ok', text: t('saved') });
-    } catch (error) {
-      setStatus({ kind: 'error', text: t('saveFailed') });
-      console.error('[dsh-subagent-setting] save failed:', error);
-    } finally {
-      setBusy(false);
-    }
-  }, [connection, t]);
+  }, [ready, snapshot.revision, saved]);
 
-  const dirty = ['enabled', 'provider', 'model', 'reasoningEffort', 'applyToIdle']
-    .some((key) => draft[key] !== saved[key]);
+  const dirty = !sameSettings(draft, saved);
+  const writable = ready && snapshot.writable === true;
 
+  const groups = catalogState.groups;
   const selectedProvider = draft.provider;
-  const selectedModel = draft.model;
   const providerGroup = groups.find((group) => group.id === selectedProvider);
   const availableModels = providerGroup?.models ?? [];
-  const selectedModelInfo = availableModels.find((model) => model.id === selectedModel);
-  const availableEfforts = selectedModelInfo?.reasoning?.efforts?.map((e) => e.id) ?? [];
+  const selectedModel = availableModels.find((model) => model.id === draft.model);
+  const availableEfforts = selectedModel?.reasoning?.efforts ?? [];
 
   // Editing only touches the draft; Save persists it.
   const edit = (patch) => {
@@ -264,7 +273,37 @@ function SubagentSettingSection({ connection, t }) {
 
   // A stale effort (left over from a model that supported it) must never
   // survive a model switch to one that does not support it.
-  const effectiveEffort = availableEfforts.includes(draft.reasoningEffort) ? draft.reasoningEffort : '';
+  const effectiveEffort = availableEfforts.some((effort) => effort.id === draft.reasoningEffort)
+    ? draft.reasoningEffort
+    : '';
+
+  const commitSave = async () => {
+    setBusy(true);
+    setStatus(null);
+    try {
+      const ok = await form.mutate([
+        { op: 'set', path: ['enabled'], value: draft.enabled },
+        { op: 'set', path: ['provider'], value: draft.provider },
+        { op: 'set', path: ['model'], value: draft.model },
+        { op: 'set', path: ['reasoningEffort'], value: draft.reasoningEffort },
+        { op: 'set', path: ['applyToIdle'], value: draft.applyToIdle },
+      ]);
+      setStatus(ok ? { kind: 'ok', text: t('saved') } : { kind: 'error', text: t('saveFailed') });
+    } catch (error) {
+      console.error('[dsh-subagent-setting] save failed:', error);
+      setStatus({ kind: 'error', text: t('saveFailed') });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!ready) {
+    return React.createElement('section', { className: 'dsh_sas_section' },
+      React.createElement('h2', { className: 'dsh_sas_title' }, t('title')),
+      React.createElement('p', { className: 'dsh_sas_status' + (snapshot.status === 'unavailable' ? ' dsh_sas_statusError' : '') },
+        snapshot.status === 'unavailable' ? t('unavailable') : t('loading')),
+    );
+  }
 
   return React.createElement('section', { className: 'dsh_sas_section', 'aria-labelledby': 'dsh-subagent-setting-title' },
     React.createElement('h2', { id: 'dsh-subagent-setting-title', className: 'dsh_sas_title' }, t('title')),
@@ -298,15 +337,15 @@ function SubagentSettingSection({ connection, t }) {
     React.createElement('div', { className: 'dsh_sas_field' },
       React.createElement('span', { className: 'dsh_sas_fieldLabel' }, t('model')),
       React.createElement(SASSelect, {
-        value: selectedModel,
+        value: draft.model,
         onChange: (value) => {
           // Switching models may drop the current reasoning effort when the
           // new model does not support it; clear it so a stale effort never
           // lingers and breaks later subagent requests.
           const nextModel = availableModels.find((model) => model.id === value);
-          const nextEfforts = nextModel?.reasoning?.efforts?.map((e) => e.id) ?? [];
+          const nextEfforts = nextModel?.reasoning?.efforts ?? [];
           const patch = { model: value };
-          if (draft.reasoningEffort !== '' && !nextEfforts.includes(draft.reasoningEffort)) {
+          if (draft.reasoningEffort !== '' && !nextEfforts.some((effort) => effort.id === draft.reasoningEffort)) {
             patch.reasoningEffort = '';
           }
           edit(patch);
@@ -328,10 +367,10 @@ function SubagentSettingSection({ connection, t }) {
         disabled: busy || !draft.enabled,
         options: [
           { value: '', label: t('effortEmpty') },
-          ...availableEfforts.map((effort) => {
-            const label = effort.charAt(0).toUpperCase() + effort.slice(1);
-            return { value: effort, label };
-          }),
+          ...availableEfforts.map((effort) => ({
+            value: effort.id,
+            label: effort.name || effort.id,
+          })),
         ],
       }),
     ),
@@ -364,41 +403,85 @@ function SubagentSettingSection({ connection, t }) {
       React.createElement('button', {
         type: 'button',
         className: 'dsh_sas_saveBtn' + (dirty ? ' dsh_sas_saveBtnDirty' : ''),
-        disabled: busy || !dirty,
-        onClick: () => void commitSave(draft),
+        disabled: busy || !dirty || !writable,
+        onClick: () => void commitSave(),
       }, busy ? t('saving') : t('save')),
     ),
 
+    catalogState.loading && React.createElement('p', { className: 'dsh_sas_status' }, t('catalogLoading')),
+    catalogState.error && React.createElement('p', { className: 'dsh_sas_status dsh_sas_statusError' }, t('catalogFailed')),
+    !writable && React.createElement('p', { className: 'dsh_sas_status dsh_sas_statusError' }, t('notWritable')),
     status !== null && React.createElement('p', {
       className: 'dsh_sas_status' + (status.kind === 'error' ? ' dsh_sas_statusError' : ''),
     }, status.text),
   );
 }
 
+/**
+ * Read the provider / model / effort catalogue once and re-read it on the
+ * Host's own invalidation signals, so a provider added in Settings → Models
+ * shows up here without a page reload.
+ */
+function createCatalog(ctx) {
+  const store = createStore({ loading: false, error: false, groups: [], failures: [] });
+  let generation = 0;
+  const refresh = async () => {
+    const mine = ++generation;
+    const previous = store.getSnapshot();
+    store.set({ ...previous, loading: true, error: false });
+    try {
+      const response = await ctx.remote.session.modelCatalog();
+      if (mine !== generation) return;
+      if (response.ok) {
+        store.set({ loading: false, error: false, groups: response.value.groups, failures: response.value.failures });
+      } else {
+        store.set({ loading: false, error: true, groups: [], failures: [] });
+      }
+    } catch (error) {
+      if (mine !== generation) return;
+      console.error('[dsh-subagent-setting] model catalog failed:', error);
+      store.set({ loading: false, error: true, groups: [], failures: [] });
+    }
+  };
+  return {
+    getSnapshot: store.getSnapshot,
+    subscribe: store.subscribe,
+    refresh,
+  };
+}
+
 function apply(ctx) {
   adoptStyles();
-  const slots = ctx.get('slots');
-  const locale = ctx.get('locale');
-  const connection = ctx.get('connection');
-  if (slots === undefined || locale === undefined || connection === undefined) return;
 
-  ctx.effect(() => locale.register(NS, { zh, en }), 'dsh-subagent-setting: dictionaries');
-  const t = locale.bind(NS);
+  const t = ctx.locale.bind(NS);
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-subagent-setting: dictionaries');
 
-  slots.inject('settings.section', () => slots.register({
+  const form = ctx.configForms.get(NS);
+  ctx.effect(() => () => form.dispose(), 'dsh-subagent-setting: settings form');
+
+  const catalog = createCatalog(ctx);
+  void catalog.refresh();
+  ctx.effect(() => ctx.remote.$on('llm/adapters-updated', () => { void catalog.refresh(); }),
+    'dsh-subagent-setting: adapter invalidations');
+  ctx.effect(() => ctx.remote.$on('settings/document-updated', () => { void catalog.refresh(); }),
+    'dsh-subagent-setting: settings invalidations');
+  ctx.effect(() => ctx.on('connection/reset', () => { void catalog.refresh(); }),
+    'dsh-subagent-setting: connection generation');
+
+  // The page exists only while the Host serves our namespace, so a profile that
+  // never mounted the Host half shows no trace of it.
+  ctx.effect(() => ctx.configForms.whileServed([NS], () => ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'subagent-setting',
     order: 45,
     label: () => t('nav'),
     locale: NS,
-    inject: () => ({ t }),
-  }, () => {
-    return React.createElement(SubagentSettingSection, { connection, t });
-  }));
+    inject: () => ({ t, form, catalog }),
+  }, SubagentSettingSection))), 'dsh-subagent-setting: settings page');
 }
 
 exports.apply = apply;
-exports.inject = ['slots', 'locale', 'connection'];
+exports.inject = ['slots', 'locale', 'remote', 'remote.session', 'configForms'];
 exports.name = 'dsh-subagent-setting';
 return module.exports;
 } });

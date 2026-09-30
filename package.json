@@ -1,7 +1,8 @@
 {
   "name": "dsh-subagent-setting",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Configure the default provider, model and reasoning effort for new subagents from the Web settings page; optionally apply changes to existing idle subagents. · DSH 插件：在设置页可视化配置 subagent 默认的提供商、模型与思考等级，新创建的 subagent 立即生效，可选的让空闲 subagent 也跟随新设置。",
+  "icon": "./icon.svg",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -14,6 +15,7 @@
       "default": "./client/client.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -23,17 +25,18 @@
     "client": {
       "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-slots",
-        "@deepseek-ai/dsh-client-locale"
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-api-remotes"
       ]
     }
   },
   "files": [
     "lib",
     "client",
+    "locale/*.json",
     "cordis.patch.yml",
-    "dsh.plugin.json",
+    "icon.svg",
     "LICENSE",
     "README.md",
     "README.zh.md"
@@ -41,25 +44,14 @@
   "scripts": {
     "check": "node --check lib/index.js && node --check client/client.js"
   },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-agent": "*",
-    "@deepseek-ai/dsh-settings": "*",
-    "@deepseek-ai/dsh-llm": "*",
-    "@deepseek-ai/dsh-client-runtime": "*",
-    "@deepseek-ai/dsh-client-ui-slots": "*",
-    "@deepseek-ai/dsh-client-locale": "*",
-    "react": "^18.2.0"
+    "@deepseek-ai/cordis": "~4.0.4"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/cordis": { "optional": true },
-    "@deepseek-ai/dsh-agent": { "optional": true },
-    "@deepseek-ai/dsh-settings": { "optional": true },
-    "@deepseek-ai/dsh-llm": { "optional": true },
-    "@deepseek-ai/dsh-client-runtime": { "optional": true },
-    "@deepseek-ai/dsh-client-ui-slots": { "optional": true },
-    "@deepseek-ai/dsh-client-locale": { "optional": true },
-    "react": { "optional": true }
+    "@deepseek-ai/cordis": { "optional": true }
   },
   "keywords": [
     "dsh",

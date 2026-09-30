@@ -1,16 +1,20 @@
 /**
  * dsh-subagent-setting — client bundle types.
  *
- * The client half registers a "Subagent Model" section in the settings panel
- * (Settings → Subagent 模型) using the official connection API. Runtime
- * behavior lives in `client/client.js` (a `window.__ModuleLoader__` bundle).
+ * The client half registers the "Subagent model" page in the settings panel
+ * (Settings → Subagent 模型). It reads and writes the Host entry's Config
+ * through the settings document (`ctx.configForms`) and reads the provider /
+ * model / reasoning-effort catalogue through `ctx.remote.session.modelCatalog`.
+ *
+ * Runtime behavior lives in `client/client.js`, which is a
+ * `window.__ModuleLoader__` bundle rather than a module this file describes.
  */
 
 /** Cordis client plugin entry. */
 export declare function apply(ctx: unknown): void;
 
-/** Cordis client hard dependencies. */
-export declare const inject: readonly ['slots', 'locale', 'connection'];
+/** Cordis client hard dependencies (cordis fiber inject). */
+export declare const inject: readonly ['slots', 'locale', 'remote', 'remote.session', 'configForms'];
 
-/** The DSH plugin name (also the cordis patch entry name). */
-export declare const name: 'dsh-subagent-setting';
+/** The settings entry id this page edits; also the DSH plugin name. */
+export declare const NS: 'dsh-subagent-setting';

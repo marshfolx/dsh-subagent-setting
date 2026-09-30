@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Subagent model",
+    "description": "Pick the default provider, model and reasoning effort for new subagents from the Web settings page."
+  }
+}

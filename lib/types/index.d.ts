@@ -1,21 +1,21 @@
 /**
  * dsh-subagent-setting — host entry types.
  *
- * The host registers a `dsh-subagent-setting` settings namespace and installs
- * an agent-scoped `agent/request` override on every live subagent. This file
- * only describes the public surface; the runtime behavior lives in
- * `lib/index.js`.
+ * The Host half owns one Config whose fields are all `volatile()`, which is what
+ * makes the entry appear on the settings page, and pins every subagent created
+ * from then on to the configured route by rewriting its LLM call config. The
+ * runtime behavior lives in `lib/index.js`; this file describes its surface.
  */
 
 /** Every reasoning effort the settings UI may offer, in escalation order. */
 export declare const REASONING_LEVELS: readonly ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
-/** The DSH plugin name (also the cordis patch entry name). */
+/** The DSH plugin name (also the cordis patch entry id). */
 export declare const name: 'dsh-subagent-setting';
 
 /**
- * The settings namespace value.
- * Empty provider / model / effort inherit the parent agent's route.
+ * The settings document, projected to the settings page.
+ * Empty provider / model / effort inherit the parent agent.
  */
 export interface SubagentSettingSettings {
   /** Master switch; when off, subagents inherit the parent untouched. */
@@ -31,7 +31,7 @@ export interface SubagentSettingSettings {
 }
 
 /** Cordis plugin entry. */
-export declare function apply(ctx: unknown): void;
+export declare function apply(ctx: unknown, config: unknown): void;
 
 /** Cordis hard dependencies. */
-export declare const inject: readonly ['settings', 'agents'];
+export declare const inject: readonly ['agents'];

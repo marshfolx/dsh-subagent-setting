@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Subagent 模型",
+    "description": "在设置页里配置新 subagent 默认使用的提供商、模型与思考等级。"
+  }
+}
